@@ -1,0 +1,608 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  SANS Institute MGT520 - Infra
+
+# Credit 
+#https://www.thorntech.com/2018/06/createvpcwithcloudformation/
+#https://stackoverflow.com/questions/50030805/enable-ssh-with-a-password-instead-of-pem-key
+#https://asecure.cloud/a/CloudTrail_w_CloudWatch/
+
+Parameters:
+  InstanceType:
+    Description: WebServer EC2 instance type
+    Type: String
+    Default: t2.nano
+    AllowedValues: [t1.micro, t2.nano, t2.micro, t2.small, t2.medium, t2.large, m1.small,
+      m1.medium, m1.large, m1.xlarge, m2.xlarge, m2.2xlarge, m2.4xlarge, m3.medium,
+      m3.large, m3.xlarge, m3.2xlarge, m4.large, m4.xlarge, m4.2xlarge, m4.4xlarge,
+      m4.10xlarge, c1.medium, c1.xlarge, c3.large, c3.xlarge, c3.2xlarge, c3.4xlarge,
+      c3.8xlarge, c4.large, c4.xlarge, c4.2xlarge, c4.4xlarge, c4.8xlarge, g2.2xlarge,
+      g2.8xlarge, r3.large, r3.xlarge, r3.2xlarge, r3.4xlarge, r3.8xlarge, i2.xlarge,
+      i2.2xlarge, i2.4xlarge, i2.8xlarge, d2.xlarge, d2.2xlarge, d2.4xlarge, d2.8xlarge,
+      hi1.4xlarge, hs1.8xlarge, cr1.8xlarge, cc2.8xlarge, cg1.4xlarge]
+    ConstraintDescription: must be a valid EC2 instance type.
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+#  KeyName:
+#    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+#    Type: AWS::EC2::KeyPair::KeyName
+#    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+  PrimaryIPAddress:
+    Type: String
+    Description: Primary private IP. This must be a valid IP address for Subnet
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})
+    Default:  192.168.101.3
+    ConstraintDescription: must be a valid IP address of the form x.x.x.x.
+
+
+
+Resources:
+  VPC: #VPC with multiple subnets, some private and some public
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 192.168.101.0/24
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0           # first AZ available
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: 192.168.101.0/28
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+  PrivateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 0           # first AZ available
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: 192.168.101.32/28
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref VPC
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  PublicRouteTable:
+    DependsOn: AttachGateway
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+  PublicDefaultRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref PublicRouteTable
+  PublicRouteAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+  PublicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 1           # Second AZ available
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: 192.168.101.16/28
+      MapPublicIpOnLaunch: true
+      VpcId: !Ref VPC
+  PrivateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+        - 1         # Second AZ available
+        - !GetAZs
+          Ref: AWS::Region
+      CidrBlock: 192.168.101.48/28
+      MapPublicIpOnLaunch: false
+      VpcId: !Ref VPC
+  PublicRouteAssociationB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetB
+
+  EC2Instance: # This is the EC2 instance for the webserver
+    Type: AWS::EC2::Instance
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          InstallAndConfig:
+              - Install
+#              - Configure
+        Install:
+          packages:
+              yum:
+                nginx: []
+                php: []
+                php-fpm: []
+                proftpd.x86_64: []
+                docker: []
+                git: []
+          services: 
+            sysvinit: 
+              nginx: 
+                enabled: "true"
+                ensureRunning: "true"
+                files: 
+                  - "/etc/nginx/nginx.conf"
+              docker:
+                enabled: "true"
+                ensureRunning: "true"
+          files:
+            "/var/www/html/index.php":  #Webpage
+              content: |
+                <html>
+                  <body>
+                    <title>MGT520 Website</title>
+                    <h1>Great!</h1>
+                    <h2>This is the corporate webserver.</h2>
+                    <p>My IP address is: <?php print $_SERVER['SERVER_ADDR']; ?></p>
+                    <p></p>
+                  </body>
+                </html>
+              mode: '000644'
+              owner: root
+              group: root
+            "/var/www/html/redirect.php":   #Redirect page
+              content: |
+                <?php
+                  if(isset($_GET['r'])) {
+                      $ch = curl_init();
+                      curl_setopt($ch, CURLOPT_URL, $_GET['r']);
+                      curl_setopt($ch, CURLOPT_HEADER, 0);
+                      curl_exec($ch);
+                      curl_close($ch);
+                  }
+                ?>
+              mode: '000644'
+              owner: root
+              group: root
+            "/etc/proftpd.conf":    
+              content: |
+                ServerName "The FTP Server!"
+                ServerType standalone
+                DefaultServer on
+                SystemLog   /var/log/proftpd/proftpd.log
+                RequireValidShell       no
+                Port 21
+
+                Umask 022
+
+                MaxInstances 30
+
+                # Set the user and group under which the server will run.
+                User nobody
+                Group nobody
+
+
+                <Directory />
+                  AllowOverwrite on
+                </Directory>
+
+                # A basic anonymous configuration, no upload directories.  If you do not
+                # want anonymous users, simply delete this entire <Anonymous> section.
+                <Anonymous ~ftp>
+                  User ftp
+                  Group ftp
+
+                  # We want clients to be able to login with "anonymous" as well as "ftp"
+                  UserAlias anonymous ftp
+
+                  # Limit the maximum number of anonymous logins
+                  MaxClients 10
+
+                  # We want 'welcome.msg' displayed at login, and '.message' displayed
+                  # in each newly chdired directory.
+                  DisplayLogin welcome.msg
+
+                  # Limit WRITE everywhere in the anonymous chroot
+                  <Limit WRITE>
+                    Deny All
+                  </Limit>
+                </Anonymous> 
+            "/etc/nginx/nginx.conf":  #Webserver config
+              content: |
+                user nginx;
+                worker_processes auto;
+                error_log /var/log/nginx/error.log;
+                pid /run/nginx.pid;
+                events {
+                  worker_connections 1024;
+                }
+                http {
+                  log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                  '$status $body_bytes_sent "$http_referer" '
+                  '"$http_user_agent" "$http_x_forwarded_for"';
+
+                    access_log  /var/log/nginx/access.log  main;
+
+                    sendfile            on;
+                    tcp_nopush          on;
+                    tcp_nodelay         on;
+                    keepalive_timeout   65;
+                    types_hash_max_size 2048;
+
+                    include             /etc/nginx/mime.types;
+                    default_type        application/octet-stream;
+
+                    # Load modular configuration files from the /etc/nginx/conf.d directory.
+                    # See http://nginx.org/en/docs/ngx_core_module.html#include
+                    # for more information.
+                    include /etc/nginx/conf.d/*.conf;
+
+                    server {
+                        listen       80 default_server;
+                        listen       [::]:80 default_server;
+                        server_name  _;
+                        root         /var/www/html;
+
+                        # Load configuration files for the default server block.
+                        include /etc/nginx/default.d/*.conf;
+
+                        location / {
+                        }
+
+                        error_page 404 /404.html;
+                        location = /404.html {
+                        }
+
+                        error_page 500 502 503 504 /50x.html;
+                        location = /50x.html {
+                        }
+                    }
+                }
+              mode: '000644'
+              owner: root
+              group: root
+            "/var/www/html/test.php": #debug page
+              content: |
+                <?php
+                phpinfo();
+                ?>
+              mode: '000644'
+              owner: root
+              group: root
+            "/tmp/py-namesearch":
+              content: |
+                import sys, json;
+                json_obj=json.load(sys.stdin)
+                for obj in json_obj:
+                        if "s3-store-" in obj:
+                                print obj
+              mode: '000644'
+              owner: root
+              group: root
+            "/tmp/secret_key":
+              content: |
+                Super secret information - my password is Password1
+              mode: '000644'
+              owner: root
+              group: root
+            "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json":  #EC2's cloudwatch agent config
+              content: !Sub |
+                {
+                  "metrics":{
+                      "append_dimensions":{
+                        "AutoScalingGroupName":"${!aws:AutoScalingGroupName}",
+                        "ImageId":"${!aws:ImageId}",
+                        "InstanceId":"${!aws:InstanceId}",
+                        "InstanceType":"${!aws:InstanceType}"
+                      },
+                      "metrics_collected":{
+                        "mem":{
+                            "measurement":[
+                              "mem_used_percent"
+                            ]
+                        },
+                        "swap":{
+                            "measurement":[
+                              "swap_used_percent"
+                            ]
+                        }
+                      }
+                  },
+                  "logs": {
+                    "logs_collected":{
+                      "files":{
+                        "collect_list":[
+                          {
+                            "file_path": "/var/log/messages",
+                            "log_group_name": "amazon-ec2instance-message.log",
+                            "log_stream_name": "amazon-ec2instance-message.log",
+                            "timezone": "UTC"
+                          },
+                          {
+                            "file_path": "/var/log/nginx/access.log",
+                            "log_group_name": "amazon-ec2instance-web-access.log",
+                            "log_stream_name": "amazon-ec2instance-web-access.log",
+                            "timezone": "UTC"
+                          }, 
+                          {
+                            "file_path": "/var/log/nginx/error.log",
+                            "log_group_name": "amazon-ec2instance-web-error.log",
+                            "log_stream_name": "amazon-ec2instance-web-error.log",
+                            "timezone": "UTC"
+                          } 
+                        ]
+                      }
+                    }
+                  }
+                }
+              mode: '000644'
+              owner: root
+              group: root 
+            "/home/ec2-user/docker/Dockerfile": #Dockerfile
+              content: |
+                FROM ubuntu:latest 
+                RUN apt-get update --fix-missing && \  
+                  apt-get install -y redis-server && \  
+                  rm -rf /var/lib/apt/lists/*  
+                EXPOSE 6379  
+                CMD redis-server
+              mode: '000644'
+              owner: ec2-user
+              group: ec2-user
+                
+    Properties:
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref 'InstanceType'
+#      KeyName: !Ref 'KeyName'
+      Monitoring: true
+      NetworkInterfaces:
+      - NetworkInterfaceId: !Ref 'Eth0'
+        DeviceIndex: '0'
+      Tags:
+      - Key: Name
+        Value: WebSrv
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash -xe
+          exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
+            useradd student
+            echo passwordMGT520 | passwd student --stdin
+            echo "student ALL=(ALL) NOPASSWD: ALL" | tee -a /etc/sudoers
+            mkdir /home/student/.ssh
+            cp ~ec2-user/.ssh/authorized_keys ~student/.ssh/authorized_keys
+            sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
+            service sshd reload
+            # Add EPEL repository & nginx
+            amazon-linux-extras enable epel
+            amazon-linux-extras enable php7.4
+            yum install -y epel-release
+            yum update -y aws-cfn-bootstrap
+            yum clean metadata
+            /opt/aws/bin/cfn-init -v --resource EC2Instance --configsets InstallAndConfig --stack ${AWS::StackName} --region ${AWS::Region}
+            sed -i '/^nobody$/d' /etc/ftpusers 
+            # Enable and start service
+            systemctl enable nginx
+            systemctl start nginx
+            systemctl enable proftpd
+            systemctl start proftpd
+            yum -y update
+            #install cloudwatch log agent
+            rpm -Uvh https://s3.amazonaws.com/amazoncloudwatch-agent/amazon_linux/amd64/latest/amazon-cloudwatch-agent.rpm
+            #cron of the pingback
+            echo "0,30 * * * * sleep $(( RANDOM % 180 )); wget -O - https://workbook-g01.mgt520.com/pingback.php > /dev/null 2>&1" >> /var/spool/cron/ec2-user
+            #Move a file to S3 (first to print the name of bucket)
+            aws s3api list-buckets --query "Buckets[].Name" | python2 /tmp/py-namesearch
+            aws s3api list-buckets --query "Buckets[].Name" | python2 /tmp/py-namesearch | xargs -I{} aws s3api put-object --bucket {}  --key secret_key --body /tmp/secret_key
+            #Clean tmp
+            rm /tmp/secret_key
+            rm /tmp/py-namesearch
+            #Add ec2-user and student users into the group for docker
+            usermod -a -G docker ec2-user
+            usermod -a -G docker student
+            #start the cloudwatch agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+
+  Eth0: 
+    Type: AWS::EC2::NetworkInterface
+    Properties:
+      Description: eth0
+      GroupSet: [!Ref 'EC2SecurityGroup']
+#      PrivateIpAddresses:
+#      - PrivateIpAddress: !Ref 'PrimaryIPAddress'
+#        Primary: 'true'
+      SourceDestCheck: 'true'
+      SubnetId: !Ref 'PublicSubnetA'
+      Tags:
+      - Key: Name
+        Value: Interface 0
+      - Key: Interface
+        Value: eth0
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Web EC2
+      GroupName: web-sec-group     
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        -
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        -
+          IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: 0.0.0.0/0
+        - 
+          IpProtocol: tcp
+          FromPort: '21'
+          ToPort: '21'
+          CidrIp: 0.0.0.0/0
+
+  S3BucketStorage:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub s3-store-${EC2Instance}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+
+  S3BucketCloudTrail:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties: #{}
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: 'aws:kms'
+        
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref WritableRole
+    
+  WritableRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+
+
+  RolePolicies:
+    Type: AWS::IAM::Policy
+    DependsOn:
+      - EC2Instance
+    Properties:
+      PolicyName: EC2InstancePolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Action: ['s3:*','ecr:*']
+            Resource: '*'
+      Roles:
+        - !Ref WritableRole
+
+  CloudTrail:
+    Type: 'AWS::CloudTrail::Trail'
+    Properties:
+      TrailName: AWSManagementEventsTrail
+      IsLogging: true
+      EnableLogFileValidation: true
+      EventSelectors:
+        - IncludeManagementEvents: true
+          ReadWriteType: All
+        - DataResources:
+            - Type: 'AWS::S3::Object'
+              Values:
+                - !Sub 'arn:aws:s3:::s3-store-${EC2Instance}/'   
+#                - 'arn:aws:s3:::'
+          ReadWriteType: All
+      IsMultiRegionTrail: true
+      IncludeGlobalServiceEvents: true
+      S3BucketName:
+        Ref: S3BucketCloudTrail
+      CloudWatchLogsLogGroupArn:
+        'Fn::GetAtt':
+          - CloudWatchLogGroup
+          - Arn
+      CloudWatchLogsRoleArn:
+        'Fn::GetAtt':
+          - CwLogsRole
+          - Arn
+    DependsOn: CTS3BucketPolicy
+
+  CTS3BucketPolicy:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket:
+        Ref: S3BucketCloudTrail
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AWSCloudTrailBucketPermissionsCheck
+            Effect: Allow
+            Principal:
+              Service:
+                - cloudtrail.amazonaws.com
+            Action: 's3:GetBucketAcl'
+            Resource:
+              'Fn::GetAtt':
+                - S3BucketCloudTrail
+                - Arn
+          - Sid: ' AWSConfigBucketDelivery'
+            Effect: Allow
+            Principal:
+              Service:
+                - cloudtrail.amazonaws.com
+            Action: 's3:PutObject'
+            Resource:
+              'Fn::Join':
+                - ''
+                - - 'Fn::GetAtt':
+                      - S3BucketCloudTrail
+                      - Arn
+                  - /AWSLogs/*
+            Condition:
+              StringEquals:
+                's3:x-amz-acl': bucket-owner-full-control
+    
+  CloudWatchLogGroup:
+    Type: 'AWS::Logs::LogGroup'
+    Properties:
+      LogGroupName: CloudTrailLogs
+
+  CwLogsRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: cloudtrail.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: allow-access-to-cw-logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                Resource: '*'
+
+  MGT520Repository: 
+    Type: AWS::ECR::Repository
+    Properties: 
+      RepositoryName: "mgt520-repository"
+      ImageScanningConfiguration: 
+        scanOnPush: "true"
